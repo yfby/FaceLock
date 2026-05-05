@@ -1,7 +1,7 @@
 // ============================================================
 //  Passcode + Serial Button Controller
 //  Buttons : 5x passcode | 1x enter | 1x send-to-USB
-//  LEDs    : Green (unlocked/success) | Red (locked/error)
+//  LEDs    : Green (unlocked/success) | Red (locked/error) | Blue (mode/USB activity)
 //
 //  Wiring (all buttons use INPUT_PULLUP — connect to GND):
 //    Passcode buttons    → D2, D3, D4, D5, D6
@@ -9,6 +9,7 @@
 //    Send button         → D8
 //    Red   LED (+220Ω)   → D9  → GND
 //    Green LED (+220Ω)   → D10 → GND
+//    Blue  LED (+220Ω)   → D11 → GND  (indicates recognition / USB activity)
 // ============================================================
 
 // ── Pin Definitions ─────────────────────────────────────────
@@ -17,14 +18,14 @@ const int BTN_ENTER         = 7;
 const int BTN_SEND          = 8;
 const int LED_RED           = 9;
 const int LED_GREEN         = 10;
-const int LED_BLUE          = 11
+const int LED_BLUE          = 11;
 
 // ── Passcode Config ──────────────────────────────────────────
 //  Edit PASSCODE_LENGTH and CORRECT_CODE to change your combo.
 //  Each value is a button number (1–5).
 //  Example below: press 1, 3, 2, 5 in order.
 const int PASSCODE_LENGTH    = 4;
-const int CORRECT_CODE[4]    = {1, 3, 2, 5};
+const int CORRECT_CODE[4]    = {1, 1, 3, 4};
 
 // ── Timing ───────────────────────────────────────────────────
 const unsigned long DEBOUNCE_MS   = 50;
@@ -35,7 +36,7 @@ const unsigned long LED_BLINK_MS  = 250;
 int  inputBuffer[PASSCODE_LENGTH];
 int  inputIndex         = 0;
 bool isUnlocked         = false;
-bool waitingForSerial   = false;
+bool isRecognitionMode  = false;
 
 unsigned long lastActivityTime = 0;
 
@@ -63,17 +64,11 @@ void setup() {
   // LEDs
   pinMode(LED_GREEN,  OUTPUT);
   pinMode(LED_RED,    OUTPUT);
-  pinMode(LED_BLUE,   OUTPUT)
+  pinMode(LED_BLUE,   OUTPUT);
 
   // Startup: both LEDs blink three times → board is alive
-  blinkBoth(3);
-
+  blinkAll(3);
   setLockedState();
-  Serial.println("READY");
-  Serial.println("---");
-  Serial.println("Host commands (newline-terminated):");
-  Serial.println("  UNLOCK | LOCK | RESET | OK");
-  Serial.println("---");
 }
 
 // ============================================================
@@ -85,28 +80,33 @@ void loop() {
     lockDevice("TIMEOUT — auto-locked");
   }
 
+  // Timeout face recognition if not timed out manually by host
+  if (isRecognitionMode && (now - lastActivityTime > LOCK_TIMEOUT)) {
+    exitRecognitionMode();
+  }
+
   // ── Passcode buttons 1–5 ──
   for (int i = 0; i < 5; i++) {
     if (buttonJustPressed(i, BTN_PASSCODE[i], now)) {
       lastActivityTime = now;
-      if (!waitingForSerial) handlePasscodeInput(i + 1);
+      if (!isRecognitionMode) handlePasscodeInput(i + 1);
     }
   }
 
   // ── Enter button ──
   if (buttonJustPressed(5, BTN_ENTER, now)) {
     lastActivityTime = now;
-    if (!waitingForSerial) handleEnter();
+    if (!isRecognitionMode) handleEnter();
   }
 
-  // ── Send button ──
+  // ── Face recognition mode button ──
   if (buttonJustPressed(6, BTN_SEND, now)) {
     lastActivityTime = now;
-    if (!waitingForSerial) handleSend();
+    if (!isRecognitionMode) enterRecognitionMode();
   }
 
   // ── Wait for host response ──
-  if (waitingForSerial && Serial.available()) {
+  if (isRecognitionMode && Serial.available()) {
     String response = Serial.readStringUntil('\n');
     response.trim();
     handleSerialResponse(response);
@@ -140,18 +140,12 @@ bool buttonJustPressed(int idx, int pin, unsigned long now) {
 void handlePasscodeInput(int digit) {
   if (inputIndex < PASSCODE_LENGTH) {
     inputBuffer[inputIndex++] = digit;
-
-    // Print masked input progress
-    Serial.print("Input [");
-    for (int i = 0; i < inputIndex; i++)   Serial.print("*");
-    for (int i = inputIndex; i < PASSCODE_LENGTH; i++) Serial.print("_");
-    Serial.println("]");
-
     blinkGreen(1);  // quick feedback tap
+    Serial.println(digit);
   } else {
-    // Buffer already full
-    Serial.println("Buffer full — press ENTER to submit or ENTER with nothing to clear.");
+    // Buffer is full -- indicate error and clear so the user may retry
     blinkRed(2);
+    clearInput();
   }
 }
 
@@ -164,7 +158,7 @@ void handleEnter() {
     if (isUnlocked) {
       lockDevice("Manually locked");
     } else {
-      Serial.println("(No input — enter passcode digits first)");
+      lockDevice("No passcode entered");
     }
     return;
   }
@@ -179,11 +173,7 @@ void handleEnter() {
   clearInput();
 
   if (match) {
-    isUnlocked = true;
-    lastActivityTime = millis();
-    digitalWrite(LED_GREEN, HIGH);
-    digitalWrite(LED_RED,   LOW);
-    Serial.println("UNLOCKED ✓");
+    unlockDevice("Unlocked with passcode");
   } else {
     isUnlocked = false;
     Serial.println("WRONG PASSCODE ✗");
@@ -195,72 +185,47 @@ void handleEnter() {
 // ============================================================
 //  Send — transmit status over USB and wait for a host command
 // ============================================================
-void handleSend() {
-  waitingForSerial = true;
+void enterRecognitionMode() {
+  isRecognitionMode = true;
 
   // Pulse both LEDs once to show transmission
-  blinkBoth(1);
+  blinkAll(1);
 
-  // Send a simple JSON payload — the host can parse and respond
-  Serial.print("{\"event\":\"BUTTON_SEND\",\"unlocked\":");
-  Serial.print(isUnlocked ? "true" : "false");
-  Serial.print(",\"inputPending\":");
-  Serial.print(inputIndex > 0 ? "true" : "false");
-  Serial.println("}");
+  // Enter face recogniton
+  Serial.println("RECOGNITION_MODE");
+  digitalWrite(LED_BLUE, HIGH);
+}
 
-  // Slow-blink red to show we're waiting
-  blinkRed(1);
-  Serial.println("(waiting for host response…)");
+void exitRecognitionMode() {
+  isRecognitionMode = false;
+
+  // Pulse both LEDs once to show transmission
+  blinkAll(1);
+
+  // Enter face recogniton
+  Serial.println("EXIT_RECOGNITION_MODE");
+  digitalWrite(LED_BLUE, LOW);
+  lockDevice("RECOGNITION_MODE_TIMEDOUT");
 }
 
 // ============================================================
 //  Handle host response over USB serial
-//
-//  Supported commands (case-sensitive, newline-terminated):
-//    UNLOCK  → force unlock regardless of passcode
-//    LOCK    → force lock
-//    RESET   → clear input buffer and lock
-//    OK      → acknowledge, restore LEDs, no state change
-//  Anything else is echoed back as UNKNOWN.
 // ============================================================
 void handleSerialResponse(String cmd) {
-  waitingForSerial = false;
+  isRecognitionMode = false;
+  digitalWrite(LED_BLUE, LOW);
 
-  if (cmd == "UNLOCK") {
-    isUnlocked = true;
-    lastActivityTime = millis();
-    digitalWrite(LED_GREEN, HIGH);
-    digitalWrite(LED_RED,   LOW);
-    Serial.println("ACK:UNLOCK");
+  if (cmd == "FACE_RECOGNIZED") {
+    unlockDevice("HOST:UNLOCKED_FACE_RECOGNIZED");
 
-  } else if (cmd == "LOCK") {
-    lockDevice("ACK:LOCK");
+  } else if (cmd == "FACE_UNRECOGNIZED") {
+    lockDevice("HOST:FACE_UNRECOGNIZED");
 
   } else if (cmd == "RESET") {
-    clearInput();
-    lockDevice("ACK:RESET");
-
-  } else if (cmd == "OK") {
-    Serial.println("ACK:OK");
-    // Restore LED state to match current lock status
-    if (isUnlocked) {
-      digitalWrite(LED_GREEN, HIGH);
-      digitalWrite(LED_RED,   LOW);
-    } else {
-      setLockedState();
-    }
+    lockDevice("HOST:RESET");
 
   } else {
-    Serial.print("UNKNOWN: \"");
-    Serial.print(cmd);
-    Serial.println("\"");
-    blinkRed(2);
-    if (isUnlocked) {
-      digitalWrite(LED_GREEN, HIGH);
-      digitalWrite(LED_RED,   LOW);
-    } else {
-      setLockedState();
-    }
+    lockDevice("HOST:UNKNOWN_COMMAND");
   }
 }
 
@@ -272,6 +237,14 @@ void lockDevice(const char* msg) {
   isUnlocked = false;
   clearInput();
   setLockedState();
+  Serial.println(msg);
+}
+
+void unlockDevice(const char* msg) {
+  isUnlocked = true;
+  lastActivityTime = millis();
+  digitalWrite(LED_GREEN, HIGH);
+  digitalWrite(LED_RED,   LOW);
   Serial.println(msg);
 }
 
@@ -287,19 +260,21 @@ void setLockedState() {
 }
 
 void blinkGreen(int times) {
-  bool redWas = digitalRead(LED_RED);
+  bool redWas  = digitalRead(LED_RED);
+  bool blueWas = digitalRead(LED_BLUE);
   for (int i = 0; i < times; i++) {
     digitalWrite(LED_GREEN, HIGH);
     delay(LED_BLINK_MS);
     digitalWrite(LED_GREEN, LOW);
     delay(LED_BLINK_MS);
   }
-  // Restore red to what it was
-  digitalWrite(LED_RED, redWas);
+  digitalWrite(LED_RED,  redWas);
+  digitalWrite(LED_BLUE, blueWas);
 }
 
 void blinkRed(int times) {
   bool greenWas = digitalRead(LED_GREEN);
+  bool blueWas  = digitalRead(LED_BLUE);
   for (int i = 0; i < times; i++) {
     digitalWrite(LED_RED, HIGH);
     delay(LED_BLINK_MS);
@@ -307,6 +282,20 @@ void blinkRed(int times) {
     delay(LED_BLINK_MS);
   }
   digitalWrite(LED_GREEN, greenWas);
+  digitalWrite(LED_BLUE,  blueWas);
+}
+
+void blinkBlue(int times) {
+  bool greenWas = digitalRead(LED_GREEN);
+  bool redWas   = digitalRead(LED_RED);
+  for (int i = 0; i < times; i++) {
+    digitalWrite(LED_BLUE, HIGH);
+    delay(LED_BLINK_MS);
+    digitalWrite(LED_BLUE, LOW);
+    delay(LED_BLINK_MS);
+  }
+  digitalWrite(LED_GREEN, greenWas);
+  digitalWrite(LED_RED,   redWas);
 }
 
 void blinkAll(int times) {
@@ -321,4 +310,3 @@ void blinkAll(int times) {
     delay(LED_BLINK_MS);
   }
 }
-
