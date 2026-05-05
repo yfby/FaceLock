@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "facelock"
+version = "0.1.0"
+description = "Face recognition door lock system"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "YFBy"}
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "face-recognition>=1.3.0",
+    "opencv-python>=4.10.0",
+    "numpy>=2.0.0",
+]
+
+[project.scripts]
+facelock = "main:main"
+
+[tool.setuptools]
+packages = ["faces"]
