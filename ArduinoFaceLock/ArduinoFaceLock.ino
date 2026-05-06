@@ -68,7 +68,7 @@ void setup() {
 
   // Startup: both LEDs blink three times → board is alive
   blinkAll(3);
-  setLockedState();
+  lockDevice("Device initialized");
 }
 
 // ============================================================
@@ -80,29 +80,26 @@ void loop() {
     lockDevice("TIMEOUT — auto-locked");
   }
 
-  // Timeout face recognition if not timed out manually by host
-  if (isRecognitionMode && (now - lastActivityTime > LOCK_TIMEOUT)) {
-    exitRecognitionMode();
-  }
-
-  // ── Passcode buttons 1–5 ──
-  for (int i = 0; i < 5; i++) {
-    if (buttonJustPressed(i, BTN_PASSCODE[i], now)) {
-      lastActivityTime = now;
-      if (!isRecognitionMode) handlePasscodeInput(i + 1);
+  if (!isUnlocked) {
+    // ── Passcode buttons 1–5 ──
+    for (int i = 0; i < 5; i++) {
+      if (buttonJustPressed(i, BTN_PASSCODE[i], now)) {
+        lastActivityTime = now;
+        if (!isRecognitionMode) handlePasscodeInput(i + 1);
+      }
     }
-  }
 
-  // ── Enter button ──
-  if (buttonJustPressed(5, BTN_ENTER, now)) {
-    lastActivityTime = now;
-    if (!isRecognitionMode) handleEnter();
-  }
+    // ── Enter button ──
+    if (buttonJustPressed(5, BTN_ENTER, now)) {
+      lastActivityTime = now;
+      if (!isRecognitionMode) handleEnter();
+    }
 
-  // ── Face recognition mode button ──
-  if (buttonJustPressed(6, BTN_SEND, now)) {
-    lastActivityTime = now;
-    if (!isRecognitionMode) enterRecognitionMode();
+    // ── Face recognition mode button ──
+    if (buttonJustPressed(6, BTN_SEND, now)) {
+      lastActivityTime = now;
+      if (!isRecognitionMode) enterRecognitionMode();
+    }
   }
 
   // ── Wait for host response ──
@@ -145,7 +142,7 @@ void handlePasscodeInput(int digit) {
   } else {
     // Buffer is full -- indicate error and clear so the user may retry
     blinkRed(2);
-    clearInput();
+    lockDevice("Buffer filled");
   }
 }
 
@@ -155,11 +152,8 @@ void handlePasscodeInput(int digit) {
 void handleEnter() {
   // Pressing Enter with nothing clears any leftover state
   if (inputIndex == 0) {
-    if (isUnlocked) {
-      lockDevice("Manually locked");
-    } else {
-      lockDevice("No passcode entered");
-    }
+    blinkRed(4);
+    lockDevice("No passcode entered");
     return;
   }
 
@@ -175,10 +169,8 @@ void handleEnter() {
   if (match) {
     unlockDevice("Unlocked with passcode");
   } else {
-    isUnlocked = false;
-    Serial.println("WRONG PASSCODE ✗");
-    blinkRed(4);       // angry blink
-    setLockedState();
+    blinkRed(4);       // angry blink 
+    lockDevice("WRONG PASSCODE ✗");
   }
 }
 
