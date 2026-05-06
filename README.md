@@ -54,11 +54,6 @@ USB: connect the Arduino to the Raspberry Pi's USB port. The Pi will see a
 serial device (commonly /dev/ttyACM0 or /dev/ttyUSB0).
 ```
 
-Notes:
-- Use common-cathode wiring shown above: one side of each button to GND, pins
-  configured INPUT_PULLUP on the Arduino.
-- Always include resistors for LEDs to avoid damaging them.
-
 ## Raspberry Pi host: quick setup
 
 1. Hardware: connect a Pi camera or USB webcam and the Arduino over USB.
@@ -118,18 +113,3 @@ the Arduino has requested recognition.
 4. Arduino receives the response and either unlocks (Green LED) or shows an
    error (Red LED).
 
-## Security notes
-
-- `faces.json` contains biometric encodings. Treat it as sensitive data and
-  protect it with filesystem permissions or encryption.
-- The system demonstrates concept-level dual-factor authentication; do not
-  deploy it as-is without reviewing physical and software hardening.
-
-## Recommended next steps
-
-- Add a small enrollment CLI (I can add one).
-- Replace prints with proper logging on the Pi.
-- Make recognition threshold and camera index configurable.
-
-If you want, I can add the enrollment script, improve logging, or create a
-diagram image for the circuit.
