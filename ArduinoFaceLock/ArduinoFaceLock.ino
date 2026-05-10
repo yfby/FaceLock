@@ -30,6 +30,7 @@ const int CORRECT_CODE[4]    = {1, 1, 3, 4};
 // ── Timing ───────────────────────────────────────────────────
 const unsigned long DEBOUNCE_MS   = 50;
 const unsigned long LOCK_TIMEOUT  = 10000;  // ms of inactivity before auto-lock
+const unsigned long RECOGNITION_TIMEOUT  = 7000;  // ms of recogniton before auto-lock
 const unsigned long LED_BLINK_MS  = 250;
 
 // ── State ────────────────────────────────────────────────────
@@ -39,6 +40,7 @@ bool isUnlocked         = false;
 bool isRecognitionMode  = false;
 
 unsigned long lastActivityTime = 0;
+unsigned long startRecognitonTime = 0;
 
 // Debounce tracking (indices 0-4 = passcode, 5 = enter, 6 = send)
 unsigned long lastDebounceTime[7] = {0};
@@ -76,29 +78,34 @@ void loop() {
   unsigned long now = millis();
 
   // Auto-lock on inactivity
-  if (isUnlocked && (now - lastActivityTime > LOCK_TIMEOUT)) {
+  if (isUnlocked && !isRecognitionMode && (now - lastActivityTime > LOCK_TIMEOUT)) {
     lockDevice("TIMEOUT — auto-locked");
   }
 
-  if (!isUnlocked) {
-    // ── Passcode buttons 1–5 ──
+  // Timeout face recogniton if not timed out manually by host
+  if (isRecognitionMode && (now - startRecognitonTime > RECOGNITION_TIMEOUT)) {
+    exitRecognitionMode();
+    lockDevice("RECOGNITION_MODE_TIMEDOUT");
+  }
+
+  if (!isRecognitionMode) {
     for (int i = 0; i < 5; i++) {
       if (buttonJustPressed(i, BTN_PASSCODE[i], now)) {
         lastActivityTime = now;
-        if (!isRecognitionMode) handlePasscodeInput(i + 1);
+        handlePasscodeInput(i + 1);
       }
     }
 
     // ── Enter button ──
     if (buttonJustPressed(5, BTN_ENTER, now)) {
       lastActivityTime = now;
-      if (!isRecognitionMode) handleEnter();
+      handleEnter();
     }
 
     // ── Face recognition mode button ──
     if (buttonJustPressed(6, BTN_SEND, now)) {
       lastActivityTime = now;
-      if (!isRecognitionMode) enterRecognitionMode();
+      enterRecognitionUnlock();
     }
   }
 
@@ -135,57 +142,121 @@ bool buttonJustPressed(int idx, int pin, unsigned long now) {
 //  Passcode digit input
 // ============================================================
 void handlePasscodeInput(int digit) {
-  if (inputIndex < PASSCODE_LENGTH) {
-    inputBuffer[inputIndex++] = digit;
-    blinkGreen(1);  // quick feedback tap
-    Serial.println(digit);
-  } else {
-    // Buffer is full -- indicate error and clear so the user may retry
-    blinkRed(2);
-    lockDevice("Buffer filled");
+  if (!isUnlocked) {
+    if (inputIndex < PASSCODE_LENGTH) {
+      inputBuffer[inputIndex++] = digit;
+      blinkGreen(1);  // quick feedback tap
+      Serial.println(digit);
+    } else {
+      // Buffer is full -- indicate error and clear so the user may retry
+      blinkRed(2);
+      lockDevice("Buffer filled");
+    }
+    return;
   }
+
+  if (isUnlocked) {
+    if (digit == 1) {
+      startRecognitonTime = millis();
+      isRecognitionMode = true;
+
+      // Pulse both LEDs once to show transmission
+      blinkBlue(3);
+
+      // Enter face recogniton
+      Serial.println("ADD_FACE");
+      digitalWrite(LED_BLUE, HIGH);
+    }
+  }
+
+  // Other buttons handles...
 }
 
 // ============================================================
 //  Enter — validate passcode
 // ============================================================
 void handleEnter() {
-  // Pressing Enter with nothing clears any leftover state
-  if (inputIndex == 0) {
-    blinkRed(4);
-    lockDevice("No passcode entered");
+  if (!isUnlocked) {
+    // Pressing Enter with nothing clears any leftover state
+    if (inputIndex == 0) {
+      blinkRed(4);
+      lockDevice("No passcode entered");
+      return;
+    }
+
+    bool match = (inputIndex == PASSCODE_LENGTH);
+    if (match) {
+      for (int i = 0; i < PASSCODE_LENGTH; i++) {
+        if (inputBuffer[i] != CORRECT_CODE[i]) { match = false; break; }
+      }
+    }
+
+    clearInput();
+
+    if (match) {
+      unlockDevice("Unlocked with passcode");
+    } else {
+      blinkRed(4);       // angry blink 
+      lockDevice("WRONG PASSCODE ✗");
+    }
     return;
   }
-
-  bool match = (inputIndex == PASSCODE_LENGTH);
-  if (match) {
-    for (int i = 0; i < PASSCODE_LENGTH; i++) {
-      if (inputBuffer[i] != CORRECT_CODE[i]) { match = false; break; }
-    }
-  }
-
-  clearInput();
-
-  if (match) {
-    unlockDevice("Unlocked with passcode");
-  } else {
-    blinkRed(4);       // angry blink 
-    lockDevice("WRONG PASSCODE ✗");
-  }
+  
+  // Other buttons handles...
 }
 
 // ============================================================
 //  Send — transmit status over USB and wait for a host command
 // ============================================================
-void enterRecognitionMode() {
-  isRecognitionMode = true;
+void enterRecognitionUnlock() {
+  if (!isUnlocked) {
+    isRecognitionMode = true;
+    startRecognitonTime = millis();
 
-  // Pulse both LEDs once to show transmission
+    // Pulse both LEDs once to show transmission
+    blinkAll(1);
+
+    // Enter face recogniton
+    Serial.println("RECOGNITION_MODE");
+    digitalWrite(LED_BLUE, HIGH);
+    return;
+  }
+
+  // Other buttons handles...
+}
+
+// ============================================================
+//  Handle host response over USB serial
+// ============================================================
+void handleSerialResponse(String cmd) {
+  if (cmd == "FACE_RECOGNIZED") {
+    unlockDevice("HOST:UNLOCKED_FACE_RECOGNIZED");
+
+  } else if (cmd == "FACE_UNRECOGNIZED") {
+    lockDevice("HOST:FACE_UNRECOGNIZED");
+  } else if (cmd == "FACE_ENROLLED") {
+    blinkBlue(2);
+  } else if (cmd == "FAILED_ENROLLMENT") {
+    lockDevice("HOST:FAILED ENROLLMENT");
+  } else if (cmd == "RESET") {
+    lockDevice("HOST:RESET");
+
+  } else {
+    lockDevice("HOST:UNKNOWN_COMMAND");
+  }
+  exitRecognitionMode();
+}
+
+// ============================================================
+//  Helpers
+// ============================================================
+
+void lockDevice(const char* msg) {
   blinkAll(1);
-
-  // Enter face recogniton
-  Serial.println("RECOGNITION_MODE");
-  digitalWrite(LED_BLUE, HIGH);
+  isUnlocked = false;
+  clearInput();
+  setLockedState();
+  Serial.println(msg);
 }
 
 void exitRecognitionMode() {
@@ -196,44 +267,15 @@ void exitRecognitionMode() {
 
   // Enter face recogniton
   Serial.println("EXIT_RECOGNITION_MODE");
-  digitalWrite(LED_BLUE, LOW);
-  lockDevice("RECOGNITION_MODE_TIMEDOUT");
-}
-
-// ============================================================
-//  Handle host response over USB serial
-// ============================================================
-void handleSerialResponse(String cmd) {
-  isRecognitionMode = false;
-  digitalWrite(LED_BLUE, LOW);
-
-  if (cmd == "FACE_RECOGNIZED") {
-    unlockDevice("HOST:UNLOCKED_FACE_RECOGNIZED");
-
-  } else if (cmd == "FACE_UNRECOGNIZED") {
-    lockDevice("HOST:FACE_UNRECOGNIZED");
-
-  } else if (cmd == "RESET") {
-    lockDevice("HOST:RESET");
-
-  } else {
-    lockDevice("HOST:UNKNOWN_COMMAND");
-  }
-}
-
-// ============================================================
-//  Helpers
-// ============================================================
-
-void lockDevice(const char* msg) {
-  isUnlocked = false;
-  clearInput();
-  setLockedState();
-  Serial.println(msg);
+  digitalWrite(LED_BLUE, LOW);  
 }
 
 void unlockDevice(const char* msg) {
   isUnlocked = true;
+
+  // Pulse both LEDs once to show transmission
+  blinkAll(1);
+
   lastActivityTime = millis();
   digitalWrite(LED_GREEN, HIGH);
   digitalWrite(LED_RED,   LOW);

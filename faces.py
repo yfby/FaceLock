@@ -9,9 +9,9 @@ JSON file but converts them to numpy arrays for recognition operations
 to match the expectations of the underlying face_recognition library.
 """
 
-from pathlib import Path
 import json
 from typing import Optional, Dict, Any, List
+from pathlib import Path
 
 import numpy as np
 import cv2
