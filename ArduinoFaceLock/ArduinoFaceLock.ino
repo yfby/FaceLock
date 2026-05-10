@@ -157,15 +157,12 @@ void handlePasscodeInput(int digit) {
 
   if (isUnlocked) {
     if (digit == 1) {
-      startRecognitonTime = millis();
-      isRecognitionMode = true;
-
       // Pulse both LEDs once to show transmission
       blinkBlue(3);
 
       // Enter face recogniton
       Serial.println("ADD_FACE");
-      digitalWrite(LED_BLUE, HIGH);
+      recognitonState();
     }
   }
 
@@ -210,15 +207,8 @@ void handleEnter() {
 // ============================================================
 void enterRecognitionUnlock() {
   if (!isUnlocked) {
-    isRecognitionMode = true;
-    startRecognitonTime = millis();
-
-    // Pulse both LEDs once to show transmission
-    blinkAll(1);
-
-    // Enter face recogniton
     Serial.println("RECOGNITION_MODE");
-    digitalWrite(LED_BLUE, HIGH);
+    recognitonState();
     return;
   }
 
@@ -237,7 +227,7 @@ void handleSerialResponse(String cmd) {
   } else if (cmd == "FACE_ENROLLED") {
     blinkBlue(2);
   } else if (cmd == "FAILED_ENROLLMENT") {
-    lockDevice("HOST:FAILED ENROLLMENT");
+    blinkRed(2);
   } else if (cmd == "RESET") {
     lockDevice("HOST:RESET");
 
@@ -252,49 +242,80 @@ void handleSerialResponse(String cmd) {
 // ============================================================
 
 void lockDevice(const char* msg) {
-  blinkAll(1);
-  isUnlocked = false;
-  clearInput();
   setLockedState();
+  blinkAll(1);
   Serial.println(msg);
 }
 
+void unlockDevice(const char* msg) {
+  setUnlockedState();
+  blinkAll(1);
+  Serial.println(msg);
+}
+
+/*
+  Setting device states:
+    LOCKED = red
+    UNLOCKED = green
+    RECOGNITION = blue
+*/
+
+// Set locked state
+void setLockedState() {
+  isUnlocked = false;
+  clearInput();
+  digitalWrite(LED_GREEN, LOW);
+  digitalWrite(LED_RED,   HIGH);
+}
+
+// Set unlocked state
+void setUnlockedState() {
+  isUnlocked = true;
+  clearInput();
+  digitalWrite(LED_GREEN, HIGH);
+  digitalWrite(LED_RED,   LOW);
+}
+
+// Set recogniton state
+void recognitonState() {
+  isRecognitionMode = true;
+  startRecognitonTime = millis();
+  digitalWrite(LED_BLUE, HIGH);
+} 
+
+// Exit recogniton
 void exitRecognitionMode() {
   isRecognitionMode = false;
-
-  // Pulse both LEDs once to show transmission
-  blinkAll(1);
-
-  // Enter face recogniton
   Serial.println("EXIT_RECOGNITION_MODE");
   digitalWrite(LED_BLUE, LOW);  
 }
 
-void unlockDevice(const char* msg) {
-  isUnlocked = true;
-
-  // Pulse both LEDs once to show transmission
-  blinkAll(1);
-
-  lastActivityTime = millis();
-  digitalWrite(LED_GREEN, HIGH);
-  digitalWrite(LED_RED,   LOW);
-  Serial.println(msg);
-}
-
+// Clears input buffer
 void clearInput() {
   inputIndex = 0;
   memset(inputBuffer, 0, sizeof(inputBuffer));
 }
 
-// Locked & ready: Red steady on, Green off
-void setLockedState() {
-  digitalWrite(LED_GREEN, LOW);
-  digitalWrite(LED_RED,   HIGH);
+// LED CONTROLS!
+
+void blinkRed(int times) {
+  bool redWas  = digitalRead(LED_RED);
+  bool greenWas = digitalRead(LED_GREEN);
+  bool blueWas = digitalRead(LED_BLUE);
+  for (int i = 0; i < times; i++) {
+    digitalWrite(LED_RED, HIGH);
+    delay(LED_BLINK_MS);
+    digitalWrite(LED_RED, LOW);
+    delay(LED_BLINK_MS);
+  }
+  digitalWrite(LED_RED,  redWas);
+  digitalWrite(LED_GREEN, greenWas);
+  digitalWrite(LED_BLUE, blueWas);
 }
 
 void blinkGreen(int times) {
   bool redWas  = digitalRead(LED_RED);
+  bool greenWas = digitalRead(LED_GREEN);
   bool blueWas = digitalRead(LED_BLUE);
   for (int i = 0; i < times; i++) {
     digitalWrite(LED_GREEN, HIGH);
@@ -303,36 +324,29 @@ void blinkGreen(int times) {
     delay(LED_BLINK_MS);
   }
   digitalWrite(LED_RED,  redWas);
+  digitalWrite(LED_GREEN, greenWas);
   digitalWrite(LED_BLUE, blueWas);
 }
 
-void blinkRed(int times) {
-  bool greenWas = digitalRead(LED_GREEN);
-  bool blueWas  = digitalRead(LED_BLUE);
-  for (int i = 0; i < times; i++) {
-    digitalWrite(LED_RED, HIGH);
-    delay(LED_BLINK_MS);
-    digitalWrite(LED_RED, LOW);
-    delay(LED_BLINK_MS);
-  }
-  digitalWrite(LED_GREEN, greenWas);
-  digitalWrite(LED_BLUE,  blueWas);
-}
-
 void blinkBlue(int times) {
+  bool redWas  = digitalRead(LED_RED);
   bool greenWas = digitalRead(LED_GREEN);
-  bool redWas   = digitalRead(LED_RED);
+  bool blueWas = digitalRead(LED_BLUE);
   for (int i = 0; i < times; i++) {
     digitalWrite(LED_BLUE, HIGH);
     delay(LED_BLINK_MS);
     digitalWrite(LED_BLUE, LOW);
     delay(LED_BLINK_MS);
   }
+  digitalWrite(LED_RED,  redWas);
   digitalWrite(LED_GREEN, greenWas);
-  digitalWrite(LED_RED,   redWas);
+  digitalWrite(LED_BLUE, blueWas);
 }
 
 void blinkAll(int times) {
+  bool redWas  = digitalRead(LED_RED);
+  bool greenWas = digitalRead(LED_GREEN);
+  bool blueWas = digitalRead(LED_BLUE);
   for (int i = 0; i < times; i++) {
     digitalWrite(LED_GREEN, HIGH);
     digitalWrite(LED_RED,   HIGH);
@@ -343,4 +357,7 @@ void blinkAll(int times) {
     digitalWrite(LED_BLUE,  LOW);
     delay(LED_BLINK_MS);
   }
+  digitalWrite(LED_RED,  redWas);
+  digitalWrite(LED_GREEN, greenWas);
+  digitalWrite(LED_BLUE, blueWas);
 }
