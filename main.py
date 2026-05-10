@@ -1,4 +1,5 @@
 import argparse
+import uuid
 import time
 import sys
 import serial
@@ -26,6 +27,30 @@ def do_recognition(face_mgr: FaceManager, timeout_s: int = 5):
         if name != "Unknown":
             return True, name
         return False, "Unknown"
+
+    return False, "Timeout"
+
+
+def enroll_face(face_mgr: FaceManager, timeout_s: int = 5):
+    """Attempt to capture and recognize a face within timeout_s seconds.
+    
+    Capture webcam and enrolls face if not existint in loaded data.
+    returns True if successfull and False if failed enrollment.
+    """
+    deadline = time.time() + float(timeout_s)
+    # Keep a small sleep to avoid a tight busy loop if the webcam isn't
+    # returning frames immediately.
+    while time.time() < deadline:
+        encoding = face_mgr.capture_face_from_webcam()
+        if encoding is None:
+            # No face captured this iteration; try again until timeout
+            time.sleep(0.1)
+            continue
+
+        if face_mgr.recognize(encoding) != "Unknown":
+            return False
+
+        return face_mgr.enroll(str(uuid.uuid1()), encoding)
 
     return False, "Timeout"
 
@@ -59,13 +84,24 @@ def main():
 
                     if line == "RECOGNITION_MODE":
                         print("running face recognition...")
-                        recognized, info = do_recognition(face_handle, timeout_s=args.timeout)
+                        recognized, info = do_recognition(face_handle)
                         if recognized:
                             print(f"Face recognized: {info}")
                             ser.write(b"FACE_RECOGNIZED\n")
                         else:
                             print(f"Face not recognized: {info}")
                             ser.write(b"FACE_UNRECOGNIZED\n")
+                    elif line == "ADD_FACE":
+                        print("enrolling face...")
+                        enroll = enroll_face(face_handle)
+                        print(enroll)
+                        if enroll:
+                            print("successfull enrollment")
+                            ser.write(b"FACE_ENROLLED\n")
+                        else:
+                            print("failed enrollment")
+                            ser.write(b"FAILED_ENROLLMENT\n")
+
             except serial.SerialException:
                 # transient serial error; report and continue
                 print("Serial connection error; retrying...", file=sys.stderr)
